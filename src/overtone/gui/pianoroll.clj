@@ -29,13 +29,6 @@
       m)
     (dissoc m k)))
 
-
-(defn note-matrix [notes n-octaves n-measures n-bars n-beats n-steps-per-beat]
-    (let [n-keys (* n-octaves 12)
-          n-total-bars (* n-bars n-measures)
-          n-steps (* n-measures (* n-bars (* n-steps-per-beat n-beats)))]
-      (reset! notes (vec (repeat n-steps (vec (repeat n-keys 0.0)))))))
-
 (defn paint-active-notes [notes active-notes g note-width note-height]
   (let []
      (doseq [[k notes] @active-notes] 
@@ -51,10 +44,6 @@
                        :foreground (color 0 150 0))))
                        )
                        )))
-
-(defn remove-active-note [matrix x-cell y-cell]
-
-)
 
 (defn paint-piano-roll
   "Paint the dial widget group"
@@ -157,26 +146,24 @@
 
 
 (defn update-note [x y active-notes-atom active-note cell-diff]
-  (let [v 1.0
+  (let [v 1.0 ;; <<-- NEED TO FIX THIS SO THAT IT GRABS THE CURRENT VELOCITY NOT JUST SETS IT TO 0
         cell-x-start (first (keys @active-note))
         cell-y-start (first (keys (@active-note (first (keys @active-note)))))
         offset (- x cell-x-start)
-        offset-diff (+ offset cell-diff)]  ;; <<-- NEED TO FIX THIS SO THAT IT GRABS THE CURRENT VELOCITY NOT JUST SETS IT TO 0
+        offset-diff (+ offset cell-diff)] 
+
     (swap! active-notes-atom (fn [notes] 
       (if (>= 0 cell-diff)
         (do
-          (dissoc-in notes [cell-x-start cell-y-start]) 
-          )
+          (dissoc-in notes [cell-x-start cell-y-start]))
         (do
           (update-in notes [cell-x-start cell-y-start] (fn [_]{:velocity v :duration cell-diff})))))) 
     
     (swap! active-note (fn [_] {cell-x-start {cell-y-start {:velocity v :duration cell-diff}}}))))
 
-(def active-note (atom nil))
-
 (defn piano-roll-widget
   [num-measures num-bars num-beats num-steps-per-beat num-octaves]
-  (let [notes-atom (atom (note-matrix (atom nil) num-octaves num-measures num-bars num-beats num-steps-per-beat))
+  (let [notes-atom (atom nil)
         active-notes-atom (atom {})
         piano-roll (canvas  :id :piano-roll
                             :paint (partial paint-piano-roll 4 4 4 4 4 notes-atom active-notes-atom))
@@ -193,8 +180,7 @@
         cell-y-start (atom nil)
         start-x (atom nil)      ;; hold the starting cell of the current gesture
         start-y (atom nil)
-        active-note (atom {})
-                ]
+        active-note (atom {})]
 
 
     (listen piano-roll
@@ -223,8 +209,7 @@
       :mouse-released
         (fn [e]  
 
-          ; (swap! creating-note (fn [b] false))
-          ; (.repaint (.getSource e)))
+          (println active-notes-atom)
           ))
     panel))
 

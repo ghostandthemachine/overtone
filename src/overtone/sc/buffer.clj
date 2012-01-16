@@ -3,7 +3,7 @@
         [overtone.helpers file]
         [overtone.util lib]
         [overtone.libs event]
-        [overtone.sc server]
+        [overtone.sc server info]
         [overtone.sc.machinery defaults allocator]
         [overtone.sc.machinery.server comms connection]
         [overtone.helpers.audio-file]
@@ -11,18 +11,35 @@
 
 (defn buffer-info
   "Fetch the information for buffer associated with buf-id (either an integer or
-  an associative with an :id key). Synchronous."
+  an associative with an :id key). Synchronous.
+
+  Information returned is as follows:
+
+  :size       - number of frames in the buffer
+  :n-channels - number of audio channels stored in the buffer
+  :rate       - rate of the buffer (typical rate is 44100 samples per second)
+  :n-samples  - total number of samples in the buffer (* size n-channels)
+  :rate-scale - rate to specify in order to play the buffer correctly according
+                to the server's sample rate (/ rate (server-sample-rate))
+  :duration   - duration of the buffer in seconds
+  :id         - unique id for the buffer"
   [buf-id]
   (let [buf-id (id-mapper buf-id)
         prom   (recv "/b_info" (fn [msg]
                                  (= buf-id (first (:args msg)))))]
     (with-server-sync #(snd "/b_query" buf-id))
-    (let [msg                               (deref! prom)
-          [buf-id n-frames n-channels rate] (:args msg)]
+    (let [msg                        (deref! prom)
+          [id n-frames n-chans rate] (:args msg)
+          num-samples                (* n-frames n-chans)
+          rate-scale                 (/ rate (server-sample-rate))
+          duration                   (/ n-frames rate)]
       (with-meta     {:size n-frames
-                      :n-channels n-channels
+                      :n-channels n-chans
                       :rate rate
-                      :id buf-id}
+                      :n-samples num-samples
+                      :rate-scale rate-scale
+                      :duration duration
+                      :id id}
         {:type ::buffer-info}))))
 
 (defn buffer
@@ -38,11 +55,8 @@
                                                      (server-sync uid)))))
            info (buffer-info id)]
        (with-meta
-         {:allocated-on-server (atom true)
-          :size (:size info)
-          :n-channels (:n-channels info)
-          :rate (:rate info)
-          :id (:id info)}
+         (merge info
+                {:allocated-on-server (atom true)})
          {:type ::buffer}))))
 
 (defn buffer-alloc-read
@@ -62,20 +76,33 @@
          (throw (Exception. (str "Unable to read file - file does not exist: " path))))
        (let [id (alloc-id :audio-buffer)]
          (with-server-sync  #(snd "/b_allocRead" id path start n-frames))
-         (let [{:keys [id size rate n-channels]} (buffer-info id)]
+         (let [info                              (buffer-info id)
+               {:keys [id size rate n-channels]} info]
            (when (every? zero? [size rate n-channels])
              (free-id :audio-buffer id)
-             (throw (Exception. (str "Unable to read file - file does not appear to be a valid audio file: " path))))
+             (throw (Exception. (str "Unable to read file - perhaps path is not a valid audio file: " path))))
            (with-meta
-             {:allocated-on-server (atom true)
-              :size size
-              :n-channels n-channels
-              :rate rate
-              :id id}
-             {:type ::buffer}))))))
+             (merge info
+                    {:allocated-on-server (atom true)})
+             {:type ::file-buffer}))))))
 
-(defn buffer? [buf]
+(derive ::buffer ::buffer-info)
+(derive ::file-buffer ::buffer)
+
+(defn buffer-info?
+  "Returns true if b-info is buffer information. This includes buffers
+  themselves in addition to the return value from #'buffer-info"
+  [b-info]
+  (isa? (type b-info) ::buffer-info))
+
+(defn buffer?
+  "Returns true if buf is a buffer."
+  [buf]
   (isa? (type buf) ::buffer))
+
+(defn file-buffer?
+  [buf]
+  (isa? (type buf) ::file-buffer))
 
 (defn buffer-free
   "Synchronously free an audio buffer and the memory it was consuming."
@@ -229,12 +256,13 @@
                                        :samples \"int32\")"
 
   [path & args]
-  (let [path (resolve-tilde-path path)
-        arg-map (merge (apply hash-map args)
-                       {:n-chans 2
-                        :size 65536
-                        :header "wav"
-                        :samples "int16"})
+  (let [path    (resolve-tilde-path path)
+        f-ext   (file-extension path)
+        arg-map (merge {:n-chans 2
+                         :size 65536
+                         :header (or f-ext "wav")
+                         :samples "int16"}
+                        (apply hash-map args))
         {:keys [n-chans size header samples]} arg-map
         buf (buffer size n-chans)]
     (snd "/b_write" (:id buf) path header samples -1 0 1)
@@ -242,19 +270,19 @@
       (assoc buf
         :path path
         :open? (atom true))
-      {:type ::buffer-stream})))
+      {:type ::buffer-out-stream})))
 
-(derive ::buffer-stream ::buffer)
+(derive ::buffer-out-stream ::file-buffer)
 
-(defn buffer-stream?
+(defn buffer-out-stream?
   [bs]
-  (isa? (type bs) ::buffer-stream))
+  (isa? (type bs) ::buffer-out-stream))
 
 (defn buffer-stream-close
   "Close a buffer stream created with #'buffer-stream. Also frees the internal
   buffer. Returns the path of the newly created file."
   [buf-stream]
-  (assert (buffer-stream? buf-stream))
+  (assert (file-buffer? buf-stream))
   (when-not @(:open? buf-stream)
     (throw (Exception. "buffer-stream already closed.")))
 
@@ -291,13 +319,13 @@
         :path path
         :start start
         :open? (atom true))
-      {:type ::buffer-cue})))
+      {:type ::buffer-in-stream})))
 
-(derive ::buffer-cue ::buffer)
+(derive ::buffer-in-stream ::file-buffer)
 
-(defn buffer-cue?
+(defn buffer-in-stream?
   [bc]
-  (isa? (type bc) ::buffer-cue))
+  (isa? (type bc) ::buffer-in-stream))
 
 (defn buffer-cue-pos
   "Moves the start position of a buffer cue to the frame indicated by
@@ -305,26 +333,13 @@
   ([buf-cue]
      (buffer-cue-pos buf-cue 0))
   ([buf-cue pos]
-     (assert (buffer-cue? buf-cue))
+     (assert (buffer-in-stream? buf-cue))
      (when-not @(:open? buf-cue)
-       (throw (Exception. "buffer-cue is closed.")))
+       (throw (Exception. "buffer-in-stream is closed.")))
      (let [{:keys [id path]} buf-cue]
        (snd "/b_close" id)
        (snd "/b_read" id path pos -1 0 1))
      buf-cue))
-
-(defn buffer-cue-close
-  "Close a buffer stream created with #'buffer-cue. Also frees the internal
-  buffer. Returns the path of the streaming file."
-  [buf-cue]
-  (assert (buffer-cue? buf-cue))
-  (when-not @(:open? buf-cue)
-    (throw (Exception. "buffer-cue already closed.")))
-
-  (snd "/b_close" (:id buf-cue))
-  (buffer-free buf-cue)
-  (reset! (:open? buf-cue) false)
-  (:path buf-cue))
 
 (defmulti buffer-id type)
 (defmethod buffer-id java.lang.Integer [id] id)
@@ -350,32 +365,11 @@
   (buffer-info (:buf s)))
 
 (defn num-frames
+  "Returns the size of the buffer."
   [buf]
-  (:size  buf))
+  (:size buf))
 
-(defn data->wavetable
-  "Convert a sequence of floats into wavetable format. Result will be twice the
-  size of source data. Length of source data must be a power of 2 for SC
-  compatability."
-  [data]
-  (let [v   (vec data)
-        cnt (count v)
-        res (float-array (* 2 cnt))]
-    (dorun
-     (map (fn [idx]
-           (let [a (get v idx)
-                 b (get v (inc idx))
-                 r-idx (* 2 idx)]
-             (aset-float res r-idx (-  (* 2 a) b))
-             (aset-float res (inc r-idx) (- b a))))
-         (range (dec cnt))))
-    (let [a (get v (dec cnt))
-          b (get v 0)]
-      (aset-float res (* 2 (dec cnt)) (- (* 2 a) b))
-      (aset-float res (inc (* 2 (dec cnt))) (- b a)))
-    (seq res)))
-
-(def two-pi (* 2 Math/PI))
+(def TWO-PI (* 2 Math/PI))
 
 (defn create-buffer-data
   "Create a sequence of floats for use as a buffer.  Result will contain
@@ -389,7 +383,7 @@
     (create-buffer-data 32 identity -1 1)
 
    Sine-wave for (osc) ugen:
-    (create-buffer-data 512 #(Math/sin %) 0 two-pi)
+    (create-buffer-data 512 #(Math/sin %) 0 TWO-PI)
 
    Chebyshev polynomial for wave-shaping:
     (create-buffer-data 1024 #(- (* 2 % %) 1) -1 1)"
@@ -397,7 +391,6 @@
   (let [range-size (- range-max range-min)
         rangemap  #(+ range-min (/ (* % range-size) size))]
     (map #(float (f (rangemap %))) (range 0 size))))
-
 
 (defn- resolve-data-type
   [& args]

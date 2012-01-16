@@ -35,12 +35,12 @@
 (defn internal-server?
   "Returns true if the server is internal"
   []
-  (= :internal (:connection (connection-info))))
+  (= :internal (:connection-type (connection-info))))
 
 (defn external-server?
   "Returns true if the server is external"
   []
-  (= :external (:connection (connection-info))))
+  (= :external (:connection-type (connection-info))))
 
 (defmacro at
   "All messages sent within the body will be sent in the same timestamped OSC
@@ -94,6 +94,7 @@
   ([port] (connect-external-server "127.0.0.1" port))
   ([host port]
      (connect host port)
+     (wait-until-deps-satisfied :server-ready)
      :connected-to-external-server))
 
 (defn boot-external-server

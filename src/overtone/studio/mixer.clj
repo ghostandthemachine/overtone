@@ -1,7 +1,7 @@
 (ns
   ^{:doc "Higher level instrument and studio abstractions."
      :author "Jeff Rose"}
-  overtone.studio.rig
+  overtone.studio.mixer
   (:use [clojure.core.incubator :only [dissoc-in]]
         [overtone.music rhythm pitch]
         [overtone.libs event deps]
@@ -17,31 +17,31 @@
 
 
 ; An instrument abstracts the more basic concept of a synthesizer used by
-; SuperCollider.  Every instance of an instrument will be played within the same
+; SuperCollider.  Every instance of an instrument will be placed in the same
 ; group, so if you later call (kill my-inst) it will be able to stop all the
 ; instances of that group.  (Likewise for controlling them...)
 
 (defonce instruments*  (ref {}))
 (defonce inst-group*   (ref nil))
 
-(def RIG-BOOT-DEPS [:server-ready :studio-setup-completed])
+(def MIXER-BOOT-DEPS [:server-ready :studio-setup-completed])
 (def DEFAULT-VOLUME 1.0)
 (def DEFAULT-PAN 0.0)
 
-(defn rig-booted? []
-  (deps-satisfied? RIG-BOOT-DEPS))
+(defn mixer-booted? []
+  (deps-satisfied? MIXER-BOOT-DEPS))
 
-(defn wait-until-rig-booted
-  "Makes the current thread sleep until the rig completed its boot process."
+(defn wait-until-mixer-booted
+  "Makes the current thread sleep until the mixer completed its boot process."
   []
-  (wait-until-deps-satisfied RIG-BOOT-DEPS))
+  (wait-until-deps-satisfied MIXER-BOOT-DEPS))
 
-(defn boot-rig
-  "Boots the server and waits until the studio rig has complete set up"
+(defn boot-mixer
+  "Boots the server and waits until the studio mixer has complete set up"
   []
-  (when-not (rig-booted?)
+  (when-not (mixer-booted?)
     (boot-server)
-    (wait-until-rig-booted)))
+    (wait-until-mixer-booted)))
 
 (defonce __MIXER-SYNTH__
   (defsynth inst-mixer [in-bus 10 out-bus 0 mix -1
@@ -111,7 +111,7 @@
   (dosync (ref-set instruments* {})))
 
 (defmacro pre-inst
-  [inst-bus & args]
+  [& args]
   (let [[sname params param-proxies ugen-form] (normalize-synth-args args)]
     `(let [~@param-proxies]
        (binding [*ugens* []
@@ -119,7 +119,7 @@
          (with-overloaded-ugens
            (let [form# ~@ugen-form
                  n-chans# (count form#)
-                 inst-bus# (audio-bus n-chans#)]
+                 inst-bus# (or (:bus (get @instruments* ~sname)) (audio-bus n-chans#))]
              (out inst-bus# form#)
              [~sname
               ~params
@@ -130,14 +130,16 @@
 
 (defmacro inst
   [sname & args]
-  `(let [[sname# params# ugens# constants# n-chans# inst-bus#] (pre-inst inst-bus# ~sname ~@args)
-         container-group# (or (:group (get @instruments* sname#))
+  `(let [[sname# params# ugens# constants# n-chans# inst-bus#] (pre-inst ~sname ~@args)
+         new-inst# (get @instruments* sname#)
+         container-group# (or (:group new-inst#)
                               (group :tail @inst-group*))
-         instance-group#  (or (:instance-group (get @instruments* sname#))
+         instance-group#  (or (:instance-group new-inst#)
                               (group :head container-group#))
-         fx-group#        (or (:fx-group (get @instruments* sname#))
+         fx-group#        (or (:fx-group new-inst#)
                               (group :tail container-group#))
-         imixer#    (inst-mixer :tgt container-group# :pos :tail :in-bus inst-bus#)
+         imixer#    (or (:mixer new-inst#)
+                        (inst-mixer :tgt container-group# :pos :tail :in-bus inst-bus#))
          sdef#      (synthdef sname# params# ugens# constants#)
          arg-names# (map :name params#)
          params-with-vals# (map #(assoc % :value (atom (:default %))) params#)
@@ -220,68 +222,15 @@
   (let [info (meta ins)]
     (.write w (format "#<instrument: %s>" (:name info)))))
 
-(defmethod overtone.sc.node/kill :overtone.studio.rig/instrument
+(defmethod overtone.sc.node/kill :overtone.studio.mixer/instrument
   [& args]
   (doseq [inst args]
     (group-clear (:instance-group inst))))
 
-(defmethod overtone.sc.node/ctl :overtone.studio.rig/instrument
+(defmethod overtone.sc.node/ctl :overtone.studio.mixer/instrument
   [inst & ctls]
   (apply node-control (:instance-group inst) (id-mapper ctls))
   (apply modify-synth-params inst ctls))
-
-(defonce session* (ref
-                    {:metro (metronome 120)
-                     :tracks {}
-                     :playing false}))
-
-(defn track [tname inst]
-  (let [t {:type :track
-           :name tname
-           :inst inst
-           :note-fn nil}]
-    (dosync (alter session* assoc-in [:tracks tname] t))))
-
-(defn remove-track
-  [tname]
-  (dosync (alter session* dissoc-in [:tracks tname])))
-
-(defn track-fn [tname f]
-  (dosync (alter session* assoc-in [:tracks tname :note-fn] f)))
-
-(defn remove-track-fn [tname]
-  (dosync (alter session* dissoc-in [:tracks tname :note-fn])))
-
-(defn session-metro [m]
-  (dosync (alter session* assoc :metro m)))
-
-(defn track-start
-  [t]
-  )
-
-(defn track-stop
-  [t]
-  )
-
-;(def m (:metro @session*))
-;(f m (m) kick)
-
-(defn playing?
-  []
-  (:playing @session*))
-
-(defn session-play
-  "Call the player functions for all tracks with the session metronome,
-  and the appropriate track instrument."
-  []
-  (let [metro (:metro @session*)
-        beat (inc (metro))]
-    (dosync (alter session* assoc :playing true))
-    (doseq [[_ t] (:tracks @session*)]
-      ((:note-fn t) metro beat (:inst t)))))
-
-(defn session-stop []
-  (dosync (alter session* assoc :playing false)))
 
 (defn load-instruments []
   (doseq [synth (filter #(synthdef? %1)
@@ -289,41 +238,4 @@
                              (vals (ns-publics 'overtone.instrument))))]
     (load-synthdef synth)))
 
-; The goal is to develop a standard "studio configuration" with
-; an fx rack and a set of fx busses, an output bus, etc...
 
-; TODO
-;
-; Audio input
-; * access samples from the microphone
-
-; Busses
-; 0 & 1 => default stereo output (to jack)
-; 2 & 3 => default stereo input
-
-; Start our busses at 1 to makes space for up to 8 on-board I/O channels
-(def BUS-MASTER 16) ; 2 channels wide for stereo
-
-; Two mono busses for doing fx sends
-(def BUS-A 18)
-(def BUS-B 19)
-
-;(synth :master
-;  (out.ar 0 (in.ar BUS-MASTER)))
-
-(def session* (ref
-  {:tracks []
-   :instruments []
-   :players []}))
-
-;(def *fx-bus (ref (Bus/audio (server) 2)))
-
-; A track holds an instrument with a set of effects and patches it into the mixer
-; * track group contains:
-;     synth group => effect group => fader synth
-
-(defn track [track-name & [n-channels]]
-  {})
-
-;(defsynth record-bus [bus-num path]
-;  )

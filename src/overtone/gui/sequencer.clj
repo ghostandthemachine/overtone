@@ -51,6 +51,7 @@
         (apply-at (metro next-beat) #'step-player
                   [state-atom next-beat])))))
 
+
 (def ^{:private true} grid-line-style
   (style :foreground "#55F" :stroke 1.0 :cap :round))
 

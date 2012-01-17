@@ -1,4 +1,4 @@
-(ns overtone.gui.npianoroll
+(ns overtone.gui.pianoroll
   (:use [overtone.sc server]
         [overtone.music time]
         [overtone.gui.control :only [synth-controller]]

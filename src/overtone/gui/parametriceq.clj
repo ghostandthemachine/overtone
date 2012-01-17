@@ -18,14 +18,18 @@
   (style    :stroke 5.0 
             :foreground (color 200 200 200 150)))
 
-(def ^{:private true} control-node-style 
+(def ^{:private true}  control-line-style
+  (style    :stroke 1.5
+            :foreground (color 255 255 255 150)))
+
+(defn-  control-node-style
+  [cx cy radius] 
   (style    :stroke 1.5
             :foreground (color 255 255 255 150)
             :background (java.awt.RadialGradientPaint.
-                (float (:x c1)) (float (:y c1)) (float (:radius c1))
-                (float-array [0.1 0.5 0.8])
-                (into-array java.awt.Color [java.awt.Color/BLACK
-                java.awt.Color/WHITE java.awt.Color/ORANGE]))))
+                (float 0) (float 0) (float radius)
+                (float-array [0.3 0.7])
+                (into-array java.awt.Color [java.awt.Color/WHITE java.awt.Color/RED]))))
 
 
 
@@ -77,21 +81,21 @@
 
 
     (draw g
-      (circle (:x l) (:y l) (:radius l))      control-node-style)
+      (circle (:x l) (:y l) (:radius l))      (control-node-style (:x l) (:y l) (:radius l)))
     
     (draw g
-      (circle (:x r) (:y r) (:radius r))      control-node-style)
+      (circle (:x r) (:y r) (:radius r))      (control-node-style (:x l) (:y l) (:radius l)))
 
     (draw g
-      (circle (:x c1) (:y c1) (:radius c1))   control-node-style)
+      (circle (:x c1) (:y c1) (:radius c1))   (control-node-style (:x l) (:y l) (:radius l)))
     
     (draw g
-      (circle (:x c2) (:y c2) (:radius c2))   control-node-style)
+      (circle (:x c2) (:y c2) (:radius c2))   (control-node-style (:x l) (:y l) (:radius l)))
     
     (draw g
-      (line (:x l) (:y l) (:x c1) (:y c1))    control-node-style  
-      (line (:x c1) (:y c1) (:x c2) (:y c2))  control-node-style
-      (line (:x c2) (:y c2) (:x r) (:y r))    control-node-style
+      (line (:x l) (:y l) (:x c1) (:y c1))    control-line-style  
+      (line (:x c1) (:y c1) (:x c2) (:y c2))  control-line-style
+      (line (:x c2) (:y c2) (:x r) (:y r))    control-line-style
 
       (doto 
         (new java.awt.geom.CubicCurve2D$Double) 

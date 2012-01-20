@@ -4,7 +4,7 @@
   (:require [seesaw.bind :as bind])
   (:import [java.awt Color Paint Stroke BasicStroke GradientPaint
             LinearGradientPaint RadialGradientPaint MultipleGradientPaint]
-          [java.awt.geom Point2D$Float Point2D$Double CubicCurve2D$Double]))
+          [java.awt.geom Point2D$Float Point2D$Double CubicCurve2D$Double GeneralPath]))
 
 (def ^{:private true} curve-style 
   (style    :stroke 4.0 
@@ -12,11 +12,15 @@
 
 (def ^{:private true} inner-line-style 
   (style    :stroke 1.5 
-            :foreground (color 0 200 0 200)))
+            :foreground (color 0 200 0 200)
+            :background (color 255 0 0)))
 
 (def ^{:private true} line-style 
   (style    :stroke 5.0 
-            :foreground (color 200 200 200 150)))
+            :foreground (color 200 200 200 150)
+            :background (java.awt.GradientPaint.
+                          (float 300) (float 500) (color 255 255 0 100)
+                          (float 300) (float 0) (color 0 0 0 0))))
 
 (def ^{:private true}  control-line-style
   (style    :stroke 1.5
@@ -27,9 +31,9 @@
   (style    :stroke 1.5
             :foreground (color 255 255 255 150)
             :background (java.awt.RadialGradientPaint.
-                (float 0) (float 0) (float radius)
-                (float-array [0.3 0.7])
-                (into-array java.awt.Color [java.awt.Color/WHITE java.awt.Color/RED]))))
+                (float cx) (float cy) (float radius)
+                (float-array [0.6 0.99])
+                (into-array java.awt.Color [(color 0 255 0 75) (color 0 255 0 175)]))))
 
 
 
@@ -58,7 +62,26 @@
     { :x      400.0    
       :y      250.0
       :radius 10.0}
-    :current-node nil})
+    :current-node nil
+
+    ; :control-node       {:x 300 :y 250 :radius 10}
+    ; :control-dimension  {:width 200.0 :height 500.0}
+    ; :bounds-thickness   5.0
+
+
+
+    })
+
+
+(defn cubic-curve 
+  [x1 y1 cx1 cy1 cx2 cy2 x2 y2]
+  (doto 
+    (new java.awt.geom.CubicCurve2D$Double) 
+      (.setCurve  
+        (float x1) (float y1) 
+        (float cx1) (float cy1) 
+        (float cx2) (float cy2) 
+        (float x2) (float y2))))    
 
 (defn paint-curve [nodes g]
   (let []
@@ -79,32 +102,24 @@
         c2              (:control-two state)]
     
 
+    (draw g
+      (doto
+        (new java.awt.geom.GeneralPath)
+          (.moveTo (float 0)  (float h))
+          (.lineTo (:x l) (:y l))
+          (.append (cubic-curve  (:x l) (:y l) (:x c1) (:y c1) (:x c2) (:y c2) (:x r) (:y r)) true)
+          (.lineTo (float w)  (float h))
+          (.lineTo (float 0) (float h))) line-style
 
-    (draw g
-      (circle (:x l) (:y l) (:radius l))      (control-node-style (:x l) (:y l) (:radius l)))
-    
-    (draw g
-      (circle (:x r) (:y r) (:radius r))      (control-node-style (:x l) (:y l) (:radius l)))
-
-    (draw g
-      (circle (:x c1) (:y c1) (:radius c1))   (control-node-style (:x l) (:y l) (:radius l)))
-    
-    (draw g
-      (circle (:x c2) (:y c2) (:radius c2))   (control-node-style (:x l) (:y l) (:radius l)))
-    
-    (draw g
       (line (:x l) (:y l) (:x c1) (:y c1))    control-line-style  
       (line (:x c1) (:y c1) (:x c2) (:y c2))  control-line-style
       (line (:x c2) (:y c2) (:x r) (:y r))    control-line-style
 
-      (doto 
-        (new java.awt.geom.CubicCurve2D$Double) 
-          (.setCurve  (:x l) (:y l) (:x c1) (:y c1) (:x c2) (:y c2) (:x r) (:y r))) 
-            curve-style
-      (doto 
-        (new java.awt.geom.CubicCurve2D$Double) 
-          (.setCurve  (:x l) (:y l) (:x c1) (:y c1) (:x c2) (:y c2) (:x r) (:y r)))
-            inner-line-style)))
+      (circle (:x l) (:y l) (:radius l))      (control-node-style (:x l) (:y l) (:radius l))
+      (circle (:x r) (:y r) (:radius r))      (control-node-style (:x r) (:y r) (:radius r))
+      (circle (:x c1) (:y c1) (:radius c1))   (control-node-style (:x c1) (:y c1) (:radius c1))
+      (circle (:x c2) (:y c2) (:radius c2))   (control-node-style (:x c2) (:y c2) (:radius c2)))))
+            
 
 
 
@@ -115,23 +130,18 @@
         rs    (atom state)]
     (doseq [[id params] state]
       (do
-        (if 
-          (and 
-            (not (nil? params)) 
-            (>= (:radius params) (distance [x y] [(:x params) (:y params)])))
-        (do 
-          (swap! rs #(assoc % :current-node id))))))
+        (if (and 
+              (not (nil? params)) 
+              (>= (:radius params) (distance [x y] [(:x params) (:y params)])))
+          (do 
+            (swap! rs #(assoc % :current-node id))))))
       @rs))
 
 (defn- update-current-control-point
   [state e]
-  (let [rs    (atom state)
-        x     (.getX e)
-        y     (.getY e)]
-    (if (not (nil? (:current-node state)))
-      (do
-      (swap! rs (fn [s] (assoc-in (assoc-in s [(:current-node s) :x] x) [(:current-node s) :y] y)))))
-    @rs))
+  (if (:current-node state)
+    (update-in state [(:current-node state)] assoc :x (.getX e) :y (.getY e))
+    state))
 
 
 (defn- on-pressed
